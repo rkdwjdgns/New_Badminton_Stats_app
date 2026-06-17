@@ -9,7 +9,10 @@ import {
   Search, 
   Trash2, 
   Edit3, 
-  ShieldAlert, 
+  ShieldAlert,
+  Download,
+  Share2,
+  X,
 } from "lucide-react";
 import { getIsolatedItem, setIsolatedItem } from "../utils";
 
@@ -27,6 +30,9 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
   const [selectedTournament, setSelectedTournament] = useState<string>("ALL_TOURNAMENTS");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showImageEditor, setShowImageEditor] = useState(false);
+  const [showStickerModal, setShowStickerModal] = useState(false);
+  const [stickerImageUrl, setStickerImageUrl] = useState<string | null>(null);
+  const [stickerFileName, setStickerFileName] = useState("");
 
   const [tournamentRanks, setTournamentRanks] = useState<Record<string, string>>(() => {
     try {
@@ -679,17 +685,73 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
     ctx.font = "900 20px sans-serif";
     ctx.fillText("SMART BADMINTON DIARY ✦ DIARY STICKER", 540, cardY + cardHeight - 85);
 
-    // Trigger PNG file export download
+    // Convert canvas to lightweight Blob URL to avoid mega-Base64 lag and enable flawless mobile saving / long-press menus
     try {
-      const image = canvas.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.download = `${tournamentName.replace(/\s+/g, "_")}_인스토리_인증스티커.png`;
-      link.href = image;
-      link.click();
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          alert("이미지 스티커 파일 생성에 실패했습니다.");
+          return;
+        }
+        
+        const url = URL.createObjectURL(blob);
+        const filename = `${tournamentName.replace(/\s+/g, "_")}_인스토리_인증스티커.png`;
+
+        // Clean up previous blob URL if any to prevent memory leaks
+        if (stickerImageUrl && stickerImageUrl.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(stickerImageUrl);
+          } catch (e) {
+            console.error("Failed to revoke blob URL", e);
+          }
+        }
+
+        setStickerImageUrl(url);
+        setStickerFileName(filename);
+        setShowStickerModal(true);
+
+        // Attempt direct download instantly
+        try {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } catch (downloadErr) {
+          console.error("Direct trigger download failed, relying on modal/longpress fallback:", downloadErr);
+        }
+      }, "image/png");
     } catch (err) {
-      console.error("Failed to download image sticker:", err);
-      alert("이미지 다운로드 도중 에러가 발생했습니다.");
+      console.error("Failed to generate image sticker blob:", err);
+      alert("이미지 스티커 정보 생성 도중 에러가 발생했습니다.");
     }
+  };
+
+  const handleManualDownload = () => {
+    if (!stickerImageUrl) return;
+    try {
+      const link = document.createElement("a");
+      link.href = stickerImageUrl;
+      link.download = stickerFileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      console.error("Manual download failure, opening directly:", e);
+      window.open(stickerImageUrl, "_blank");
+    }
+  };
+
+  const handleCloseStickerModal = () => {
+    setShowStickerModal(false);
+    if (stickerImageUrl && stickerImageUrl.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(stickerImageUrl);
+      } catch (e) {
+        console.error("Failed revoking on close", e);
+      }
+    }
+    setStickerImageUrl(null);
   };
 
   const parseScore = (scoreStr: string) => {
@@ -1659,6 +1721,89 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
             <p className="text-xs text-slate-400 mt-1">검색어나 결과 필터를 조절해 보세요.</p>
           </div>
         )
+      )}
+
+      {/* MODAL POPUP DIALOG for Competition Verification Tournament Sticker (Mobile & Desktop Bulletproof) */}
+      {showStickerModal && stickerImageUrl && (
+        <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-sm p-5 shadow-2xl animate-scaleIn text-slate-800 font-sans flex flex-col gap-4">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
+              <div className="flex flex-col">
+                <h3 className="text-xs font-black text-slate-900 flex items-center gap-1.5 uppercase tracking-wide">
+                  📲 대회 인증 투명 스티커
+                </h3>
+                <span className="text-[9px] text-slate-455 font-bold mt-0.5">인스타그램 스토리 업로드 전용 (9:16)</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseStickerModal}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100 cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Sticker Preview (Interactive Transparent Board) */}
+            <div className="flex flex-col items-center justify-center p-2 rounded-2xl border border-slate-200/80 bg-slate-50 shadow-inner relative overflow-hidden">
+              <div 
+                className="w-full h-64 rounded-xl flex items-center justify-center overflow-hidden border border-slate-200 shadow-xs"
+                style={{
+                  backgroundImage: "conic-gradient(#eaeaea 0.25turn, #ffffff 0.25turn 0.5turn, #eaeaea 0.5turn 0.75turn, #ffffff 0.75turn)",
+                  backgroundSize: "20px 20px"
+                }}
+              >
+                <img
+                  src={stickerImageUrl}
+                  alt="인스타 스토리 인증 스티커"
+                  className="max-h-full max-w-full object-contain hover:scale-105 transition-transform duration-250 cursor-pointer pointer-events-auto"
+                  style={{
+                    userSelect: "auto",
+                    WebkitUserSelect: "auto",
+                    WebkitTouchCallout: "default"
+                  }}
+                  title="모바일에서는 이미지를 길게 눌러 갤러리에 직접 저장할 수 있습니다!"
+                />
+              </div>
+              <span className="text-[10px] text-slate-500 font-bold mt-1.5 flex items-center gap-1 select-none animate-pulse">
+                💡 꾹~ 길게 눌러 갤러리에 저장하기 가능!
+              </span>
+            </div>
+
+            {/* Platform-Specific Guides / Tip Callout */}
+            <div className="bg-amber-50/50 border border-amber-200/60 rounded-xl p-3 text-left">
+              <span className="text-[10.5px] font-black text-amber-800 block mb-1">
+                ⚠️ 모바일 이용자 필독 안내
+              </span>
+              <p className="text-[9.5px] text-amber-700 font-bold leading-relaxed space-y-1">
+                카카오톡, 인앱 브라우저 및 일부 모바일 기기에서는 브라우저 보안 정책으로 다운로드 버튼이 작동하지 않을 수 있습니다.
+                <br />
+                이 경우, <strong className="text-amber-900 underline underline-offset-2">위 미리보기 이미지를 3초간 꾹 누르신 후 [이미지 저장]</strong>을 클릭해주세요!
+              </p>
+            </div>
+
+            {/* CTA Actions Group */}
+            <div className="pt-1 border-t border-slate-100 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleManualDownload}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 hover:scale-102 active:scale-95 shadow-md"
+              >
+                <Download className="w-4 h-4" /> 이미지 파일 다운로드 받기
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCloseStickerModal}
+              className="text-slate-450 hover:text-slate-600 text-[10.5px] font-bold text-center underline cursor-pointer hover:bg-slate-50 py-1 rounded"
+            >
+              닫기
+            </button>
+
+          </div>
+        </div>
       )}
 
     </div>
