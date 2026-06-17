@@ -1,0 +1,6 @@
+{
+  "name": "SmintonS",
+  "description": "모바일에 완벽 최적화된 심플하고 강력한 배드민턴 경기 결과 및 전적 관리 아카이브",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

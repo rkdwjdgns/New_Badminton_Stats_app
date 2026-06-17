@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SmintonS</string>
+    <string name="title_activity_main">SmintonS</string>
+    <string name="package_name">com.smintons.app</string>
+    <string name="custom_url_scheme">com.smintons.app</string>
+</resources>
