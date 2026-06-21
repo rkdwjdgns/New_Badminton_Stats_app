@@ -67,6 +67,32 @@ export default function App() {
     }
   };
 
+  // Restore saved login on app start and keep it in sync while the app is running.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (isMounted) {
+        handleSessionChange(data.session);
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      if (isMounted) {
+        handleSessionChange(newSession);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
   // Keep header name reactive and isolated
   useEffect(() => {
     setCurrentUserProfileName(getIsolatedItem("my_badminton_name", user?.id) || "");

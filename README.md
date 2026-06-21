@@ -22,7 +22,9 @@ View your app in AI Studio: https://ai.studio/apps/b64a9758-5d65-4466-9925-0e5ba
 how to set
 add file .env
 npm install
-npm run build
 npx cap add android
+
+내용추가후 여는법
+npm run build
 npx cap sync
 npx cap open android

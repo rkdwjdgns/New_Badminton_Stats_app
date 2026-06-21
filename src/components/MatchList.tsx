@@ -4,17 +4,23 @@
  */
 
 import React, { useState, useEffect } from "react";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { MatchRecord } from "../types";
 import { 
   Search, 
   Trash2, 
   Edit3, 
   ShieldAlert,
-  Download,
   Share2,
   X,
 } from "lucide-react";
 import { getIsolatedItem, setIsolatedItem } from "../utils";
+
+interface SmintonsPhotoSaverPlugin {
+  savePng(options: { base64Data: string; fileName: string }): Promise<{ uri: string; fileName: string }>;
+}
+
+const SmintonsPhotoSaver = registerPlugin<SmintonsPhotoSaverPlugin>("SmintonsPhotoSaver");
 
 interface MatchListProps {
   records: MatchRecord[];
@@ -32,7 +38,7 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
   const [showImageEditor, setShowImageEditor] = useState(false);
   const [showStickerModal, setShowStickerModal] = useState(false);
   const [stickerImageUrl, setStickerImageUrl] = useState<string | null>(null);
-  const [stickerFileName, setStickerFileName] = useState("");
+  const [stickerSaveMessage, setStickerSaveMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
   const [tournamentRanks, setTournamentRanks] = useState<Record<string, string>>(() => {
     try {
@@ -93,6 +99,70 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
       handleSaveTournamentImage(tName, base64String, 50);
     };
     reader.readAsDataURL(file);
+  };
+
+  const getStickerFileName = (tournamentName: string) =>
+    `${tournamentName.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_")}_인스타_인증스티커.png`;
+
+  const blobToBase64 = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result;
+        if (typeof result !== "string") {
+          reject(new Error("이미지 데이터를 읽을 수 없습니다."));
+          return;
+        }
+        resolve(result.split(",")[1] || "");
+      };
+      reader.onerror = () => reject(reader.error || new Error("이미지 데이터를 읽을 수 없습니다."));
+      reader.readAsDataURL(blob);
+    });
+
+  const triggerBrowserDownload = (url: string, fileName: string) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const saveStickerImage = async (blob: Blob, imageUrl: string, fileName: string) => {
+    setStickerSaveMessage(null);
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const base64Data = await blobToBase64(blob);
+        await SmintonsPhotoSaver.savePng({ base64Data, fileName });
+        setStickerSaveMessage({
+          text: "갤러리에 저장했습니다. 사진 앱의 SmintonS 폴더를 확인해 주세요.",
+          type: "success",
+        });
+        return;
+      } catch (nativeError) {
+        console.error("Native gallery save failed:", nativeError);
+        setStickerSaveMessage({
+          text: "갤러리 저장에 실패했습니다. 대회 인증 버튼을 다시 눌러 주세요.",
+          type: "error",
+        });
+        return;
+      }
+    }
+
+    try {
+      triggerBrowserDownload(imageUrl, fileName);
+      setStickerSaveMessage({
+        text: "이미지 다운로드를 시작했습니다.",
+        type: "success",
+      });
+    } catch (downloadError) {
+      console.error("Browser download failed:", downloadError);
+      setStickerSaveMessage({
+        text: "자동 다운로드가 막혔습니다.",
+        type: "error",
+      });
+    }
   };
 
   const handleDownloadInstagramSticker = (
@@ -694,7 +764,7 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
         }
         
         const url = URL.createObjectURL(blob);
-        const filename = `${tournamentName.replace(/\s+/g, "_")}_인스토리_인증스티커.png`;
+        const filename = getStickerFileName(tournamentName);
 
         // Clean up previous blob URL if any to prevent memory leaks
         if (stickerImageUrl && stickerImageUrl.startsWith("blob:")) {
@@ -706,39 +776,13 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
         }
 
         setStickerImageUrl(url);
-        setStickerFileName(filename);
         setShowStickerModal(true);
 
-        // Attempt direct download instantly
-        try {
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        } catch (downloadErr) {
-          console.error("Direct trigger download failed, relying on modal/longpress fallback:", downloadErr);
-        }
+        void saveStickerImage(blob, url, filename);
       }, "image/png");
     } catch (err) {
       console.error("Failed to generate image sticker blob:", err);
       alert("이미지 스티커 정보 생성 도중 에러가 발생했습니다.");
-    }
-  };
-
-  const handleManualDownload = () => {
-    if (!stickerImageUrl) return;
-    try {
-      const link = document.createElement("a");
-      link.href = stickerImageUrl;
-      link.download = stickerFileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch (e) {
-      console.error("Manual download failure, opening directly:", e);
-      window.open(stickerImageUrl, "_blank");
     }
   };
 
@@ -752,6 +796,7 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
       }
     }
     setStickerImageUrl(null);
+    setStickerSaveMessage(null);
   };
 
   const parseScore = (scoreStr: string) => {
@@ -1763,36 +1808,21 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
                     WebkitUserSelect: "auto",
                     WebkitTouchCallout: "default"
                   }}
-                  title="모바일에서는 이미지를 길게 눌러 갤러리에 직접 저장할 수 있습니다!"
                 />
               </div>
-              <span className="text-[10px] text-slate-500 font-bold mt-1.5 flex items-center gap-1 select-none animate-pulse">
-                💡 꾹~ 길게 눌러 갤러리에 저장하기 가능!
-              </span>
             </div>
 
-            {/* Platform-Specific Guides / Tip Callout */}
-            <div className="bg-amber-50/50 border border-amber-200/60 rounded-xl p-3 text-left">
-              <span className="text-[10.5px] font-black text-amber-800 block mb-1">
-                ⚠️ 모바일 이용자 필독 안내
-              </span>
-              <p className="text-[9.5px] text-amber-700 font-bold leading-relaxed space-y-1">
-                카카오톡, 인앱 브라우저 및 일부 모바일 기기에서는 브라우저 보안 정책으로 다운로드 버튼이 작동하지 않을 수 있습니다.
-                <br />
-                이 경우, <strong className="text-amber-900 underline underline-offset-2">위 미리보기 이미지를 3초간 꾹 누르신 후 [이미지 저장]</strong>을 클릭해주세요!
-              </p>
-            </div>
-
-            {/* CTA Actions Group */}
-            <div className="pt-1 border-t border-slate-100 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={handleManualDownload}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 hover:scale-102 active:scale-95 shadow-md"
+            {stickerSaveMessage && (
+              <div
+                className={`rounded-xl border p-3 text-[10.5px] font-extrabold leading-relaxed ${
+                  stickerSaveMessage.type === "success"
+                    ? "bg-emerald-50 text-emerald-800 border-emerald-150"
+                    : "bg-rose-50 text-rose-700 border-rose-150"
+                }`}
               >
-                <Download className="w-4 h-4" /> 이미지 파일 다운로드 받기
-              </button>
-            </div>
+                {stickerSaveMessage.text}
+              </div>
+            )}
 
             <button
               type="button"

@@ -21,7 +21,13 @@ export const isSupabaseConfigured = Boolean(
 );
 
 export const supabase = isSupabaseConfigured
-  ? createClient(cleanSupabaseUrl, supabaseAnonKey)
+  ? createClient(cleanSupabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
+    })
   : null;
 
 /**
