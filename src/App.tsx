@@ -144,7 +144,22 @@ export default function App() {
 
           // Keep remote records list
           const rawDbMatches = data || [];
-          const mappedRemote = rawDbMatches.map(mapDbToMatchRecord);
+          const mappedRemoteAll = rawDbMatches.map(mapDbToMatchRecord);
+          const dummyRemoteIds = mappedRemoteAll
+            .filter((r) => isDummyMatch(r))
+            .map((r) => r.id)
+            .filter(Boolean);
+          const mappedRemote = mappedRemoteAll.filter((r) => !isDummyMatch(r));
+
+          if (dummyRemoteIds.length > 0) {
+            const { error: cleanupError } = await supabase!
+              .from("matches")
+              .delete()
+              .in("id", dummyRemoteIds);
+            if (cleanupError) {
+              console.warn("Failed to clean dummy remote records:", cleanupError);
+            }
+          }
 
           // BIDIRECTIONAL MUTUAL MERGE: ID-based Map to prevent overwriting/loss
           const mergedMap = new Map<string, MatchRecord>();
@@ -181,8 +196,7 @@ export default function App() {
           const unsyncedLocal = localRecords.filter(r => 
             r && r.id && 
             !remoteIds.has(r.id) && 
-            r.id !== "sample-1" && 
-            r.id !== "sample-2"
+            !isDummyMatch(r)
           );
 
           if (unsyncedLocal.length > 0) {

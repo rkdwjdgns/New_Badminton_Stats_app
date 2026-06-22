@@ -14,13 +14,80 @@ import {
   Share2,
   X,
 } from "lucide-react";
-import { getIsolatedItem, setIsolatedItem } from "../utils";
+import { getIsolatedItem, getIsolatedKey, setIsolatedItem } from "../utils";
 
 interface SmintonsPhotoSaverPlugin {
   savePng(options: { base64Data: string; fileName: string }): Promise<{ uri: string; fileName: string }>;
 }
 
 const SmintonsPhotoSaver = registerPlugin<SmintonsPhotoSaverPlugin>("SmintonsPhotoSaver");
+const TOURNAMENT_IMAGES_KEY = "badminton_tournament_images";
+const TOURNAMENT_IMAGE_DB_NAME = "smintons_tournament_assets";
+const TOURNAMENT_IMAGE_STORE_NAME = "poster_images";
+
+type TournamentImage = { url: string; offsetY: number };
+
+const openTournamentImageDb = () =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(TOURNAMENT_IMAGE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(TOURNAMENT_IMAGE_STORE_NAME)) {
+        db.createObjectStore(TOURNAMENT_IMAGE_STORE_NAME, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+
+const getStoredTournamentImages = async (userId?: string) => {
+  const db = await openTournamentImageDb();
+  const keyPrefix = `${getIsolatedKey(TOURNAMENT_IMAGES_KEY, userId)}::`;
+
+  return new Promise<Record<string, TournamentImage>>((resolve, reject) => {
+    const transaction = db.transaction(TOURNAMENT_IMAGE_STORE_NAME, "readonly");
+    const store = transaction.objectStore(TOURNAMENT_IMAGE_STORE_NAME);
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+      const images: Record<string, TournamentImage> = {};
+      (request.result || []).forEach((item: any) => {
+        if (typeof item?.key === "string" && item.key.startsWith(keyPrefix)) {
+          const tournamentName = item.key.slice(keyPrefix.length);
+          images[tournamentName] = { url: item.url, offsetY: item.offsetY };
+        }
+      });
+      resolve(images);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const saveStoredTournamentImage = async (userId: string | undefined, tournamentName: string, image: TournamentImage) => {
+  const db = await openTournamentImageDb();
+  const key = `${getIsolatedKey(TOURNAMENT_IMAGES_KEY, userId)}::${tournamentName}`;
+
+  return new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(TOURNAMENT_IMAGE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(TOURNAMENT_IMAGE_STORE_NAME);
+    const request = image.url
+      ? store.put({ key, tournamentName, url: image.url, offsetY: image.offsetY })
+      : store.delete(key);
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const removeLegacyTournamentImages = (userId?: string) => {
+  try {
+    localStorage.removeItem(getIsolatedKey(TOURNAMENT_IMAGES_KEY, userId));
+    localStorage.removeItem(getIsolatedKey(TOURNAMENT_IMAGES_KEY));
+    localStorage.removeItem(TOURNAMENT_IMAGES_KEY);
+  } catch (err) {
+    console.error("Failed to remove legacy tournament poster cache:", err);
+  }
+};
 
 interface MatchListProps {
   records: MatchRecord[];
@@ -49,14 +116,18 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
     }
   });
 
-  const [tournamentImages, setTournamentImages] = useState<Record<string, { url: string; offsetY: number }>>(() => {
+  const loadLegacyTournamentImages = (userId?: string) => {
     try {
-      const data = getIsolatedItem("badminton_tournament_images", user?.id);
+      const data = getIsolatedItem(TOURNAMENT_IMAGES_KEY, userId);
       return data ? JSON.parse(data) : {};
     } catch {
       return {};
     }
-  });
+  };
+
+  const [tournamentImages, setTournamentImages] = useState<Record<string, TournamentImage>>(() =>
+    loadLegacyTournamentImages(user?.id)
+  );
 
   // Re-sync ranks and images dynamically when the logged-in user changes
   useEffect(() => {
@@ -67,12 +138,33 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
       setTournamentRanks({});
     }
 
-    try {
-      const data = getIsolatedItem("badminton_tournament_images", user?.id);
-      setTournamentImages(data ? JSON.parse(data) : {});
-    } catch {
-      setTournamentImages({});
-    }
+    let isMounted = true;
+    const legacyImages = loadLegacyTournamentImages(user?.id);
+    setTournamentImages(legacyImages);
+
+    getStoredTournamentImages(user?.id)
+      .then(async (storedImages) => {
+        if (!isMounted) return;
+
+        const mergedImages = { ...legacyImages, ...storedImages };
+        setTournamentImages(mergedImages);
+
+        if (Object.keys(legacyImages).length > 0) {
+          await Promise.all(
+            Object.entries(legacyImages).map(([tName, image]) =>
+              saveStoredTournamentImage(user?.id, tName, image as TournamentImage)
+            )
+          );
+          removeLegacyTournamentImages(user?.id);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load tournament poster images:", err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, [user?.id]);
 
   const [showRankSelector, setShowRankSelector] = useState(false);
@@ -83,10 +175,16 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
     setIsolatedItem("badminton_tournament_ranks", JSON.stringify(updated), user?.id);
   };
 
-  const handleSaveTournamentImage = (tName: string, url: string, offsetY: number) => {
+  const handleSaveTournamentImage = async (tName: string, url: string, offsetY: number) => {
     const updated = { ...tournamentImages, [tName]: { url, offsetY } };
     setTournamentImages(updated);
-    setIsolatedItem("badminton_tournament_images", JSON.stringify(updated), user?.id);
+    try {
+      await saveStoredTournamentImage(user?.id, tName, { url, offsetY });
+      removeLegacyTournamentImages(user?.id);
+    } catch (err) {
+      console.error("Failed to save tournament poster image:", err);
+      alert("포스터 사진을 저장하지 못했습니다. 사진 용량을 줄여서 다시 올려주세요.");
+    }
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>, tName: string) => {
@@ -697,7 +795,7 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
       }
     }
 
-    // Beautiful traditional "SmintoS공식인증" stamp on the bottom (as requested!)
+    // Beautiful traditional "SmintonS 공식인증" stamp on the bottom.
     const drawCertificationStamp = (
       c: CanvasRenderingContext2D,
       cx: number,
@@ -725,11 +823,11 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
       c.lineTo(104, 4);
       c.stroke();
 
-      // Top text: SmintoS Brand
-      c.font = "900 25px 'Impact', 'Arial Black', sans-serif";
+      // Top text: SmintonS Brand
+      c.font = "900 23px 'Impact', 'Arial Black', sans-serif";
       c.textAlign = "center";
       c.textBaseline = "middle";
-      c.fillText("SmintoS", 0, -18);
+      c.fillText("SmintonS", 0, -18);
 
       // Bottom text: 공식인증 in gorgeous traditional korean font
       c.font = "900 20px 'Nanum Myeongjo', 'Batang', 'Times New Roman', serif";
@@ -753,7 +851,7 @@ export default function MatchList({ records, onDelete, onEditToggle, user }: Mat
     ctx.fillStyle = "#000000";
     ctx.textAlign = "center";
     ctx.font = "900 20px sans-serif";
-    ctx.fillText("SMART BADMINTON DIARY ✦ DIARY STICKER", 540, cardY + cardHeight - 85);
+    ctx.fillText("MATCH RECORD ✦ SMINTONS BADMINTON CLUB", 540, cardY + cardHeight - 85);
 
     // Convert canvas to lightweight Blob URL to avoid mega-Base64 lag and enable flawless mobile saving / long-press menus
     try {

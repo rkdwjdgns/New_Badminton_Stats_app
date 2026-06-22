@@ -60,9 +60,26 @@ export function removeIsolatedItem(baseKey: string, userId?: string): void {
 // Standard sample records are now empty to ensure a clean start
 export const SAMPLE_RECORDS: MatchRecord[] = [];
 
-// Helper to detect mock/test dummy records - disabled to prevent deleting or filtering any user-authored records
+// Helper to detect mock/test dummy records.
 export function isDummyMatch(r: any): boolean {
-  return false;
+  const normalize = (value: unknown) =>
+    String(value ?? "")
+      .replace(/\s+/g, "")
+      .trim();
+
+  const opponentName = normalize(r?.opponent?.name);
+  const opponentName2 = normalize(r?.opponent?.name2);
+  const flatOpponentName = normalize(r?.opponent_name);
+  const flatOpponentName2 = normalize(r?.opponent_name2);
+  const dummyOpponentNames = new Set(["ㅇ", "ㅇ?"]);
+
+  return (
+    String(r?.id ?? "").startsWith("sample-") ||
+    dummyOpponentNames.has(opponentName) ||
+    dummyOpponentNames.has(opponentName2) ||
+    dummyOpponentNames.has(flatOpponentName) ||
+    dummyOpponentNames.has(flatOpponentName2)
+  );
 }
 
 // Load records from LocalStorage with deep fallbacks
@@ -204,5 +221,4 @@ export function calculateStatistics(records: MatchRecord[]): Statistics {
     avgOppScore,
   };
 }
-
 
